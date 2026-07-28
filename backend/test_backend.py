@@ -123,6 +123,12 @@ check("Duplicate group name is rejected", r.status_code == 400, r.text)
 r = requests.get(f"{BASE_URL}/groups", headers=HEADERS)
 check("List groups includes the new one", any(g["id"] == group_id for g in r.json()))
 
+r = requests.get(f"{BASE_URL}/groups/{group_id}", headers=HEADERS)
+check("Get single group by ID succeeds", r.status_code == 200 and r.json()["id"] == group_id, r.text)
+
+r = requests.get(f"{BASE_URL}/groups/not-a-real-id", headers=HEADERS)
+check("Get a nonexistent group returns 404", r.status_code == 404, r.text)
+
 names = ["Karim", "Lea", "Sam"]
 person_ids = {}
 for name in names:
@@ -153,6 +159,22 @@ r = requests.post(f"{BASE_URL}/groups/{group_id}/expenses", json={
 }, headers=HEADERS)
 check("Add weighted (uneven) expense", r.status_code == 200, r.text)
 expense2_id = r.json()["id"] if r.status_code == 200 else None
+
+if expense2_id:
+    r = requests.put(f"{BASE_URL}/groups/{group_id}/expenses/{expense2_id}", json={
+        "payer_id": person_ids["Lea"], "amount": 25.0, "label": "Restaurant (updated)", "is_recurring": True,
+        "beneficiary_weights": {person_ids["Lea"]: 1, person_ids["Sam"]: 1},
+    }, headers=HEADERS)
+    check("Update (edit) an existing expense", r.status_code == 200, r.text)
+    check("Updated expense reflects the new amount", r.status_code == 200 and r.json()["amount"] == 25.0)
+    check("Updated expense reflects the new label", r.status_code == 200 and r.json()["label"] == "Restaurant (updated)")
+
+    # Revert back to the original values so the rest of the test's expected totals stay correct.
+    r = requests.put(f"{BASE_URL}/groups/{group_id}/expenses/{expense2_id}", json={
+        "payer_id": person_ids["Lea"], "amount": 20.0, "label": "Restaurant", "is_recurring": True,
+        "beneficiary_weights": {person_ids["Lea"]: 0.5, person_ids["Sam"]: 1},
+    }, headers=HEADERS)
+    check("Revert expense back to original values", r.status_code == 200, r.text)
 
 r = requests.post(f"{BASE_URL}/groups/{group_id}/expenses", json={
     "payer_id": "not-a-real-id", "amount": 10.0, "beneficiary_weights": {person_ids["Karim"]: 1},
@@ -206,6 +228,10 @@ if debtor_transfer:
     }, headers=HEADERS)
     check("Record a repayment matching the suggested transfer", r.status_code == 200, r.text)
     repayment_id = r.json()["id"] if r.status_code == 200 else None
+
+    r = requests.get(f"{BASE_URL}/groups/{group_id}/repayments", headers=HEADERS)
+    check("List repayments includes the one just recorded", r.status_code == 200
+          and any(rep["id"] == repayment_id for rep in r.json()), r.text)
 
     r = requests.get(f"{BASE_URL}/groups/{group_id}/totals", headers=HEADERS)
     new_totals = r.json()
@@ -268,6 +294,12 @@ share_token = group["share_token"]
 r = requests.get(f"{BASE_URL}/share/{share_token}")
 check("Share link works with no auth header", r.status_code == 200, r.text)
 
+r = requests.get(f"{BASE_URL}/share/{share_token}/people")
+check("Share link people endpoint works with no auth", r.status_code == 200 and len(r.json()) >= 3, r.text)
+
+r = requests.get(f"{BASE_URL}/share/{share_token}/expenses")
+check("Share link expenses endpoint works with no auth", r.status_code == 200 and len(r.json()) >= 1, r.text)
+
 r = requests.get(f"{BASE_URL}/share/{share_token}/totals")
 check("Share link totals endpoint works with no auth", r.status_code == 200, r.text)
 
@@ -315,6 +347,24 @@ section("Cleanup")
 
 r = requests.delete(f"{BASE_URL}/groups/{group_id}", headers=HEADERS)
 check("Delete the test group", r.status_code == 200, r.text)
+
+# Direct database check: confirm the delete actually cascaded and didn't
+# just remove the group row while leaving orphaned people/expenses/repayments behind.
+import os
+import sqlite3
+
+db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "whoowes.db")
+if os.path.exists(db_path):
+    conn = sqlite3.connect(db_path)
+    orphan_people = conn.execute("SELECT COUNT(*) FROM people WHERE group_id = ?", (group_id,)).fetchone()[0]
+    orphan_expenses = conn.execute("SELECT COUNT(*) FROM expenses WHERE group_id = ?", (group_id,)).fetchone()[0]
+    orphan_repayments = conn.execute("SELECT COUNT(*) FROM repayments WHERE group_id = ?", (group_id,)).fetchone()[0]
+    conn.close()
+    check("No orphaned people left after group delete", orphan_people == 0, f"found {orphan_people}")
+    check("No orphaned expenses left after group delete", orphan_expenses == 0, f"found {orphan_expenses}")
+    check("No orphaned repayments left after group delete", orphan_repayments == 0, f"found {orphan_repayments}")
+else:
+    print("  (skipped - whoowes.db not found next to this script)")
 
 
 # =========================================================
