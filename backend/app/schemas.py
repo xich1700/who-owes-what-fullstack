@@ -131,3 +131,9 @@ class ParseExpenseResult(BaseModel):
     label: str | None = None
     beneficiary_ids: list[str] | None = None
     error: str | None = None
+
+
+# ---- Receipt scanning ----
+class ScanReceiptResult(BaseModel):
+    amount: float
+    label: str

@@ -287,6 +287,26 @@ check("Ambiguous sentence is rejected", result.get("ok") is False)
 # =========================================================
 # 8) Share link (public, no auth)
 # =========================================================
+section("Receipt scanning (validation only - no real API key used)")
+
+r = requests.post(f"{BASE_URL}/groups/{group_id}/expenses/scan-receipt",
+                   data={"api_key": " "}, files={"file": ("test.jpg", b"fake", "image/jpeg")}, headers=HEADERS)
+check("Blank/whitespace API key is rejected", r.status_code == 400, r.text)
+
+r = requests.post(f"{BASE_URL}/groups/{group_id}/expenses/scan-receipt",
+                   data={"api_key": "sk-fake"}, files={"file": ("test.txt", b"fake", "text/plain")}, headers=HEADERS)
+check("Non-image file is rejected", r.status_code == 400, r.text)
+
+r = requests.post(f"{BASE_URL}/groups/{group_id}/expenses/scan-receipt",
+                   data={"api_key": "sk-obviously-invalid-key"},
+                   files={"file": ("test.jpg", b"fake-image-bytes", "image/jpeg")}, headers=HEADERS)
+check("A bad API key is rejected cleanly (not a 500 crash)", r.status_code == 400, r.text)
+
+r = requests.post(f"{BASE_URL}/groups/{group_id}/expenses/scan-receipt",
+                   data={"api_key": "sk-fake"}, files={"file": ("test.jpg", b"fake", "image/jpeg")})
+check("Receipt scan requires auth", r.status_code == 401, r.text)
+
+
 section("Public share link")
 
 share_token = group["share_token"]

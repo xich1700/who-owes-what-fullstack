@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
@@ -6,6 +6,7 @@ from ..database import get_db
 from ..deps import get_current_manager, get_owned_group
 from ..logic import compute_totals, simplify_debts
 from ..nlp import parse_expense_sentence
+from ..receipt import extract_receipt_via_ai
 
 router = APIRouter(tags=["expenses"])
 
@@ -167,6 +168,31 @@ def parse_expense(
     people_dicts = [{"id": p.id, "name": p.name} for p in people]
     result = parse_expense_sentence(payload.sentence, people_dicts)
     return schemas.ParseExpenseResult(**result)
+
+
+# ---- Receipt scanning (never auto-saves - same rule as NLP parsing above) ----
+@router.post("/groups/{group_id}/expenses/scan-receipt", response_model=schemas.ScanReceiptResult)
+def scan_receipt(
+    group_id: str,
+    api_key: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    manager: models.Manager = Depends(get_current_manager),
+):
+    get_owned_group(group_id, db, manager)  # just verifies ownership; group itself unused here
+
+    if not api_key.strip():
+        raise HTTPException(status_code=400, detail="Enter your Anthropic API key.")
+    if file.content_type not in ("image/jpeg", "image/png"):
+        raise HTTPException(status_code=400, detail="Please upload a JPEG or PNG photo.")
+
+    image_bytes = file.file.read()
+    media_type = "image/png" if file.content_type == "image/png" else "image/jpeg"
+
+    result, error = extract_receipt_via_ai(image_bytes, media_type, api_key.strip())
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    return schemas.ScanReceiptResult(**result)
 
 
 # ---- Repayments ----
